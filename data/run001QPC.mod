@@ -1,0 +1,39 @@
+;; 1. Based on: 001
+;; 2. Description: 1-comp oral, linear elim
+;; 3. Label:
+;; x1. Author: devin
+
+$PROBLEM PK
+
+$INPUT ID TIME DV AMT DOSE MDV ISM
+
+$DATA ../data1.csv IGNORE=@
+
+$SUBROUTINES ADVAN2 TRANS2
+
+$PK
+TVCL = THETA(1)*(1 + THETA(2)*(1-ISM))
+CL = TVCL * EXP(ETA(1))
+V  = THETA(3) * EXP(ETA(2))
+KA = THETA(4) * EXP(ETA(3))
+S2 = V
+
+$ERROR
+REP = IREP
+IPRED = F
+ Y = F*(1 + EPS(1))
+
+
+$THETA  
+0.495704 ; CL
+ -0.804158 ; femaleCL proportion
+ 1.00481 ; V
+ 0.961397 ; KA
+
+$OMEGA  0.072431  ;     IIV CL
+ 0.0988913  ;      IIV V
+ 0.0649482  ;     IIV KA
+
+$SIGMA  0.00958705  ; 10% prop variability
+$SIM ONLYSIM (12345) SUBPROBLEMS = 100
+$TABLE ID REP TIME DV IPRED PRED AMT DOSE ISM MDV NOHEADER NOAPPEND NOPRINT FILE=run001QPC

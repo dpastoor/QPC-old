@@ -1,0 +1,460 @@
+Validation
+========================================================
+
+```{r}
+QPC <- function(data, simulation)
+setwd("~/BEproj/nonmem_population/")
+dat <- read.table("sdtab907sim")
+names(dat) <- c("ID", "REP", "TADd", "TIME", "DV", "rDV", "EVID", 
+                "AMT", "DOSE", "ISM", "IPRED", "CWRES", "DV.1", "PRED", "RES", "WRES")
+library(plyr)
+library(ggplot2)
+library(gridExtra)
+library(PKPDmisc)
+realdat <- read.csv("IM380_ZO.csv")
+
+tocalculate <- dat[, c("REP", "ID","DOSE", "TIME", "IPRED", "PRED", "rDV", "DV", "ISM")]
+#tocalculate$DV[tocalculate$TADd == 0] <- 0
+#tocalculate$DV[tocalculate$DV <= 0.2] <- 0
+```
+
+Visualization of 100 reps overlaid
+```{r}
+sims <- subset(tocalculate, REP <= 100)
+plot <- ggplot(sims, aes(x = TIME, y = IPRED, group = interaction(REP, ID))) + geom_line(aes(color = DOSE)) + geom_line(data=realdat, aes(x = TIME, y = DV, group = ID)) 
+plot
+plot + facet_wrap(~ISM)
+```
+
+
+
+```{r additional_functions}
+base_theme <- function() { theme(legend.text = element_text(size = 18),
+                                 legend.title = element_text(size = 20),
+                                 axis.title.x = element_text(size = 22, face = "bold"),
+                                 axis.title.y = element_text(size = 22, face = "bold"),
+                                 axis.text.x = element_text(color = "black", size = 18),
+                                 axis.text.y = element_text(color = "black", size = 18),
+                                 strip.text.x = element_text(color = "black", size = 16, face = "bold"))
+}
+
+EC_check  <- function(vec) {
+  counter <- ifelse(vec > 0.8 & vec < 1.25, 1, 0) 
+  sum(counter)/length(counter)
+}
+
+
+```
+
+
+
+```{r cmax}
+cmax <- ddply(tocalculate, .(REP, ID), summarize, cmax = max(DV))
+cmaxreal <- ddply(realdat[realdat$TIME <= 28,], .(ID), summarize, cmax = max(DV))
+sum_statscmax <- ddply(cmax, .(REP), summarize, twentyfive = quantile(cmax, probs = 0.25),
+                       fifty = quantile(cmax, probs = 0.50),
+                       seventyfive = quantile(cmax, probs = 0.75))
+r25 <- quantile(cmaxreal$cmax, probs = 0.25)
+r50 <- quantile(cmaxreal$cmax, probs = 0.50)
+r75 <- quantile(cmaxreal$cmax, probs = 0.75)
+
+### Predictive p-values
+sum_statscmax <- within(sum_statscmax, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                        p50 <- ifelse(fifty > r50, 1, 0)
+                                        p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statscmax <- within(sum_statscmax, {eq25 <- log(twentyfive)/log(r25)
+                                        eq50 <- log(fifty)/log(r50)
+                                        eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PPinf <- unlist(lapply(sum_statscmax[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQinf <- unlist(lapply(sum_statscmax[,c("eq25", "eq50", "eq75")], EC_check))
+
+### cmax plots #############################
+## 25 percentile
+gg25 <- ggplot(sum_statscmax, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile Cmax") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PPinf[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQinf[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statscmax, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile Cmax")+ 
+  annotate("text", x = r50, y = 18, label = paste0("PredP =", PPinf[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r50, y = 20, label = paste0("EqCrit =", EQinf[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statscmax, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile Cmax")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PPinf[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQinf[[3]]), hjust = -0.1, size = 5)
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+```
+
+
+```{r AUC_subsets}
+###Datasets to calculate partial AUCs ###########
+# 0-3 days
+tocalc0_3 <- tocalculate[tocalculate$TIME <= 3,]
+# 3-7
+tocalc3_7 <- tocalculate[tocalculate$TIME >= 3 & tocalculate$TIME <= 7,]
+# 3-10
+tocalc3_10 <- tocalculate[tocalculate$TIME >= 3 & tocalculate$TIME <= 10,]
+
+# 7-28
+tocalc7_28 <- tocalculate[tocalculate$TIME >= 7 & tocalculate$TIME <= 28,]
+
+#10-28
+tocalc10_28 <- tocalculate[tocalculate$TIME >= 10 & tocalculate$TIME <= 28,]
+
+## real data splits
+# 0-3 days
+realdat0_3 <- realdat[realdat$TIME <= 3,]
+# 3-7
+realdat3_7 <- realdat[realdat$TIME >= 3 & realdat$TIME <= 7,]
+realdat3_10 <- realdat[realdat$TIME >= 3 & realdat$TIME <= 10,]
+
+# 7-28
+realdat7_28 <- realdat[realdat$TIME >= 7 & realdat$TIME <= 28,]
+#10-28
+realdat10_28 <- realdat[realdat$TIME >= 10 & realdat$TIME <= 28,]
+
+```
+
+```{r AUC0_28}
+AUC28 <- ddply(tocalculate, .(REP, ID), summarize, AUC28 = AUC_partial(TIME, DV))
+AUC28real <- ddply(tocalculate, .(REP, ID), summarize, AUC28 = AUC_partial(TIME, DV))
+sum_statsAUC28 <- ddply(AUC28, .(REP), summarize, twentyfive = quantile(AUC28, probs = 0.25),
+                        fifty = quantile(AUC28, probs = 0.50),
+                        seventyfive = quantile(AUC28, probs = 0.75))
+r25 <- quantile(AUC28real$AUC28, probs = 0.25)
+r50 <- quantile(AUC28real$AUC28, probs = 0.50)
+r75 <- quantile(AUC28real$AUC28, probs = 0.75)
+
+### Predictive p-values
+sum_statsAUC28 <- within(sum_statsAUC28, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                          p50 <- ifelse(fifty > r50, 1, 0)
+                                          p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statsAUC28 <- within(sum_statsAUC28, {eq25 <- log(twentyfive)/log(r25)
+                                          eq50 <- log(fifty)/log(r50)
+                                          eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PP0_28 <- unlist(lapply(sum_statsAUC28[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQ0_28 <- unlist(lapply(sum_statsAUC28[,c("eq25", "eq50", "eq75")], EC_check))
+
+
+
+
+### AUC plots ###
+
+## 25% percentile
+gg25 <- ggplot(sum_statsAUC28, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile AUC0-28days") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PP0_28[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQ0_28[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statsAUC28, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile AUC0-28days")+ 
+  annotate("text", x = r50, y = 18, label = paste0("PredP =", PP0_28[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r50, y = 20, label = paste0("EqCrit =", EQ0_28[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statsAUC28, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile AUC0-28days")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PP0_28[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQ0_28[[3]]), hjust = -0.1, size = 5)
+
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+## outlier exploration
+#which(sum_statsAUC28$seventyfive > 170)
+#sum_statsAUC28[103,]
+#131/177 ##fails equivalence if non log transformed
+#log(131)/log(177)
+```
+
+
+```{r AUC0_3}
+################## AUC 0 - 3 days ########################
+AUC0_3 <- ddply(tocalc0_3, .(REP, ID), summarize, AUC0_3 = AUC_partial(TIME, DV))
+AUC0_3real <- ddply(realdat0_3, .(ID), summarize, AUC0_3 = AUC_partial(TIME, DV))
+sum_statsAUC0_3 <- ddply(AUC0_3, .(REP), summarize, twentyfive = quantile(AUC0_3, probs = 0.25),
+                         fifty = quantile(AUC0_3, probs = 0.50),
+                         seventyfive = quantile(AUC0_3, probs = 0.75))
+r25 <- quantile(AUC0_3real$AUC0_3, probs = 0.25)
+r50 <- quantile(AUC0_3real$AUC0_3, probs = 0.50)
+r75 <- quantile(AUC0_3real$AUC0_3, probs = 0.75)
+
+### Predictive p-values
+sum_statsAUC0_3 <- within(sum_statsAUC0_3, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                            p50 <- ifelse(fifty > r50, 1, 0)
+                                            p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statsAUC0_3 <- within(sum_statsAUC0_3, {eq25 <- log(twentyfive)/log(r25)
+                                            eq50 <- log(fifty)/log(r50)
+                                            eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PP0_3 <- unlist(lapply(sum_statsAUC0_3[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQ0_3 <- unlist(lapply(sum_statsAUC0_3[,c("eq25", "eq50", "eq75")], EC_check))
+library(ggplot2)
+### AUC plots ##
+
+## 25% percentile
+gg25 <- ggplot(sum_statsAUC0_3, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile AUC0-3days") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PP0_3[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQ0_3[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statsAUC0_3, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile AUC0-3days")+ 
+  annotate("text", x = r50, y = 18, label = paste0("PredP =", PP0_3[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r50, y = 20, label = paste0("EqCrit =", EQ0_3[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statsAUC0_3, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile AUC0-3days")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PP0_3[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQ0_3[[3]]), hjust = -0.1, size = 5)
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+
+```
+
+
+
+
+```{r AUC3_7}
+
+################## AUC 3 - 7 days ########################
+AUC3_7 <- ddply(tocalc3_7, .(REP, ID), summarize, AUC3_7 = AUC_partial(TIME, DV))
+AUC3_7real <- ddply(realdat3_7, .(ID), summarize, AUC3_7 = AUC_partial(TIME, DV))
+sum_statsAUC3_7 <- ddply(AUC3_7, .(REP), summarize, twentyfive = quantile(AUC3_7, probs = 0.25),
+                         fifty = quantile(AUC3_7, probs = 0.50),
+                         seventyfive = quantile(AUC3_7, probs = 0.75))
+r25 <- quantile(AUC3_7real$AUC3_7, probs = 0.25)
+r50 <- quantile(AUC3_7real$AUC3_7, probs = 0.50)
+r75 <- quantile(AUC3_7real$AUC3_7, probs = 0.75)
+
+### Predictive p-values
+sum_statsAUC3_7 <- within(sum_statsAUC3_7, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                            p50 <- ifelse(fifty > r50, 1, 0)
+                                            p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statsAUC3_7 <- within(sum_statsAUC3_7, {eq25 <- log(twentyfive)/log(r25)
+                                            eq50 <- log(fifty)/log(r50)
+                                            eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PP3_7 <- unlist(lapply(sum_statsAUC3_7[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQ3_7 <- unlist(lapply(sum_statsAUC3_7[,c("eq25", "eq50", "eq75")], EC_check))
+
+### AUC plots ##
+## 25% percentile
+gg25 <- ggplot(sum_statsAUC3_7, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile AUC3-7days") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PP3_7[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQ3_7[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statsAUC3_7, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile AUC3-7days")+ 
+  annotate("text", x = 35, y = 18, label = paste0("PredP =", PP3_7[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = 35, y = 20, label = paste0("EqCrit =", EQ3_7[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statsAUC3_7, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile AUC3-7days")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PP3_7[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQ3_7[[3]]), hjust = -0.1, size = 5)
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+```
+
+```{r AUC3_10}
+
+################## AUC 3 - 7 days ########################
+AUC3_10 <- ddply(tocalc3_10, .(REP, ID), summarize, AUC3_10 = AUC_partial(TIME, DV))
+AUC3_10real <- ddply(realdat3_10, .(ID), summarize, AUC3_10 = AUC_partial(TIME, DV))
+sum_statsAUC3_10 <- ddply(AUC3_10, .(REP), summarize, twentyfive = quantile(AUC3_10, probs = 0.25),
+                         fifty = quantile(AUC3_10, probs = 0.50),
+                         seventyfive = quantile(AUC3_10, probs = 0.75))
+r25 <- quantile(AUC3_10real$AUC3_10, probs = 0.25)
+r50 <- quantile(AUC3_10real$AUC3_10, probs = 0.50)
+r75 <- quantile(AUC3_10real$AUC3_10, probs = 0.75)
+
+### Predictive p-values
+sum_statsAUC3_10 <- within(sum_statsAUC3_10, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                            p50 <- ifelse(fifty > r50, 1, 0)
+                                            p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statsAUC3_10 <- within(sum_statsAUC3_10, {eq25 <- log(twentyfive)/log(r25)
+                                            eq50 <- log(fifty)/log(r50)
+                                            eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PP3_10 <- unlist(lapply(sum_statsAUC3_10[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQ3_10 <- unlist(lapply(sum_statsAUC3_10[,c("eq25", "eq50", "eq75")], EC_check))
+
+### AUC plots ##
+## 25% percentile
+gg25 <- ggplot(sum_statsAUC3_10, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile AUC3-10days") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PP3_10[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQ3_10[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statsAUC3_10, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile AUC3-10days")+ 
+  annotate("text", x = 35, y = 18, label = paste0("PredP =", PP3_10[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = 35, y = 20, label = paste0("EqCrit =", EQ3_10[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statsAUC3_10, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile AUC3-10days")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PP3_10[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQ3_10[[3]]), hjust = -0.1, size = 5)
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+```
+
+
+```{r AUC7_28}
+
+################## AUC 7 - 28 days ########################
+AUC7_28 <- ddply(tocalc7_28, .(REP, ID), summarize, AUC7_28 = AUC_partial(TIME, DV))
+AUC7_28real <- ddply(realdat7_28, .(ID), summarize, AUC7_28 = AUC_partial(TIME, DV))
+sum_statsAUC7_28 <- ddply(AUC7_28, .(REP), summarize, twentyfive = quantile(AUC7_28, probs = 0.25),
+                          fifty = quantile(AUC7_28, probs = 0.50),
+                          seventyfive = quantile(AUC7_28, probs = 0.75))
+r25 <- quantile(AUC7_28real$AUC7_28, probs = 0.25)
+r50 <- quantile(AUC7_28real$AUC7_28, probs = 0.50)
+r75 <- quantile(AUC7_28real$AUC7_28, probs = 0.75)
+### Predictive p-values
+sum_statsAUC7_28 <- within(sum_statsAUC7_28, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                              p50 <- ifelse(fifty > r50, 1, 0)
+                                              p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statsAUC7_28 <- within(sum_statsAUC7_28, {eq25 <- log(twentyfive)/log(r25)
+                                              eq50 <- log(fifty)/log(r50)
+                                              eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PP7_28 <- unlist(lapply(sum_statsAUC7_28[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQ7_28 <- unlist(lapply(sum_statsAUC7_28[,c("eq25", "eq50", "eq75")], EC_check))
+
+### AUC plots ##
+## 25% percentile
+gg25 <- ggplot(sum_statsAUC7_28, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile AUC7-28days") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PP7_28[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQ7_28[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statsAUC7_28, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile AUC7-28days")+ 
+  annotate("text", x = r50, y = 18, label = paste0("PredP =", PP7_28[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r50, y = 20, label = paste0("EqCrit =", EQ7_28[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statsAUC7_28, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile AUC7-28days")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PP7_28[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQ7_28[[3]]), hjust = -0.1, size = 5)
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+```
+
+
+```{r AUC10_28}
+################## AUC 10 - 28 days ########################
+AUC10_28 <- ddply(tocalc10_28, .(REP, ID), summarize, AUC10_28 = AUC_partial(TIME, DV))
+AUC10_28real <- ddply(realdat10_28, .(ID), summarize, AUC10_28 = AUC_partial(TIME, DV))
+sum_statsAUC10_28 <- ddply(AUC10_28, .(REP), summarize, twentyfive = quantile(AUC10_28, probs = 0.25),
+                          fifty = quantile(AUC10_28, probs = 0.50),
+                          seventyfive = quantile(AUC10_28, probs = 0.75))
+r25 <- quantile(AUC10_28real$AUC10_28, probs = 0.25)
+r50 <- quantile(AUC10_28real$AUC10_28, probs = 0.50)
+r75 <- quantile(AUC10_28real$AUC10_28, probs = 0.75)
+### Predictive p-values
+sum_statsAUC10_28 <- within(sum_statsAUC10_28, {p25 <- ifelse(twentyfive > r25, 1, 0)
+                                              p50 <- ifelse(fifty > r50, 1, 0)
+                                              p75 <- ifelse(seventyfive > r75, 1, 0)
+})
+### equivalence criteria
+sum_statsAUC10_28 <- within(sum_statsAUC10_28, {eq25 <- log(twentyfive)/log(r25)
+                                              eq50 <- log(fifty)/log(r50)
+                                              eq75 <- log(seventyfive)/log(r75)
+})
+
+
+PP10_28 <- unlist(lapply(sum_statsAUC10_28[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+EQ10_28 <- unlist(lapply(sum_statsAUC10_28[,c("eq25", "eq50", "eq75")], EC_check))
+
+### AUC plots ##
+## 25% percentile
+gg25 <- ggplot(sum_statsAUC10_28, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r25, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("25th Percentile AUC10-28days") + 
+  annotate("text", x = r25, y = 18, label = paste0("PredP =", PP10_28[[1]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r25, y = 20, label = paste0("EqCrit =", EQ10_28[[1]]), hjust = -0.1, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_statsAUC10_28, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r50, size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile AUC10-28days")+ 
+  annotate("text", x = r50, y = 18, label = paste0("PredP =", PP10_28[[2]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r50, y = 20, label = paste0("EqCrit =", EQ10_28[[2]]), hjust = -0.1, size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_statsAUC10_28, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = r75, size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile AUC10-28days")+ 
+  annotate("text", x = r75, y = 18, label = paste0("PredP =", PP10_28[[3]]), hjust = -0.1, size = 5) +
+  annotate("text", x = r75, y = 20, label = paste0("EqCrit =", EQ10_28[[3]]), hjust = -0.1, size = 5)
+
+grid.arrange(gg25, gg50, gg75, ncol = 3)
+```
