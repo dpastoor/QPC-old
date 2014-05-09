@@ -1,0 +1,89 @@
+---
+title: "QPC_example1"
+author: "Devin"
+date: "Friday, May 09, 2014"
+output: html_document
+---
+
+```{r}
+libraries <- c("ggplot2","gridExtra", "PKPDmisc", "dplyr")
+lapply(libraries, require, character.only = TRUE)
+file_sources <- list.files(c("Rscripts/"), 
+                          pattern="*.R$", full.names=TRUE, 
+                          ignore.case=TRUE)
+
+# source each file in the list
+sapply(file_sources,source,.GlobalEnv) 
+```
+
+```{r}
+real_dat <- read.csv("data/data1.csv")
+
+# with NSUB nonmem gives a 'table' name after each rep if you keep a header in
+# by removing header you get only data so can be read more quickly into R but loose
+# table names, so need to manually add them from the mod file TABLE statment
+sim_dat <- read_nonmem("data/run001QPC", skip = 0, header = FALSE)
+sim_names <- c("ID","REP","TIME","DV","IPRED","PRED","AMT","DOSE","ISM","MDV")
+colnames(sim_dat) <- sim_names
+```
+
+## CMAX
+```{r}
+cmax_sim <- sim_dat %>% 
+    filter(MDV != 1) %>% 
+    group_by(REP, ID) %>%
+    summarize(cmax = max(DV)) %>%
+  group_by(REP, add = FALSE) %>%
+  summarize(twentyfive = quantile(cmax, probs = 0.25),
+            fifty = quantile(cmax, probs = 0.50),
+            seventyfive = quantile(cmax, probs = 0.75))
+
+  cmax_real <- real_dat %>% 
+  filter(MDV != 1) %>% 
+  group_by(ID) %>%
+  summarize(cmax = max(DV)) %>%
+    ungroup() %>%
+  summarize(twentyfive = quantile(cmax, probs = 0.25),
+            fifty = quantile(cmax, probs = 0.50),
+            seventyfive = quantile(cmax, probs = 0.75))
+
+## calculate summary statistics
+sum_stats_cmax <- within(cmax_sim, {p25 <- ifelse(twentyfive > cmax_real[["twentyfive"]], 1, 0)
+                                    p50 <- ifelse(fifty > cmax_real[["fifty"]], 1, 0)
+                                    p75 <- ifelse(seventyfive > cmax_real[["seventyfive"]], 1, 0)
+                                    eq25 <- log(twentyfive)/log(cmax_real[["twentyfive"]])
+                                    eq50 <- log(fifty)/log(cmax_real[["fifty"]])
+                                    eq75 <- log(seventyfive)/log(cmax_real[["seventyfive"]])
+})
+
+  PPinf <- unlist(lapply(sum_stats_cmax[,c("p25", "p50", "p75")], function(x) sum(x)/length(x)))
+  EQinf <- unlist(lapply(sum_stats_cmax[,c("eq25", "eq50", "eq75")], eq_check))
+```
+
+
+```{r}
+gg25 <- ggplot(sum_stats_cmax, aes(x = twentyfive)) + geom_histogram(color = "black", fill = "white") + 
+ geom_vline(xintercept = cmax_real[["twentyfive"]], size = 2, color = "red") + theme_bw() +   xlab("25th Percentile Cmax") + 
+  annotate("text", x = -Inf, y = Inf, label = paste0("PredP =", PPinf[[1]]), hjust = -0.1,vjust =2, size = 5) +
+  annotate("text", x = -Inf, y = Inf, label = paste0("EqCrit =", EQinf[[1]]), hjust = -0.1,vjust =4, size = 5)
+
+## 50% percentile
+gg50 <- ggplot(sum_stats_cmax, aes(x = fifty)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = cmax_real[["fifty"]], size = 2, color = "red") + theme_bw() + base_theme() +
+  xlab("50th Percentile Cmax")+ 
+  annotate("text", x = -Inf, y = Inf, label = paste0("PredP =", PPinf[[2]]), hjust = -0.1, vjust = 2,  size = 5) +
+  annotate("text", x = -Inf, y = Inf, label = paste0("EqCrit =", EQinf[[2]]), hjust = -0.1, vjust = 4,  size = 5)
+
+
+## 75th percentile
+gg75 <- ggplot(sum_stats_cmax, aes(x = seventyfive)) + geom_histogram(color = "black", fill = "white") + 
+  geom_vline(xintercept = cmax_real[["seventyfive"]], size = 2, color = "red") + theme_bw() + base_theme() + 
+  xlab("75th Percentile Cmax")+ 
+  annotate("text", x = -Inf, y = Inf, label = paste0("PredP =", PPinf[[3]]), hjust = -0.1, vjust = 2, size = 5) +
+  annotate("text", x = -Inf, y = Inf, label = paste0("EqCrit =", EQinf[[3]]), hjust = -0.1, vjust = 4, size = 5)
+
+gg25
+gg50
+gg75
+```
+
